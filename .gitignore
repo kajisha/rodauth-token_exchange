@@ -1,0 +1,7 @@
+/.bundle/
+/vendor/
+/pkg/
+/*.gem
+/Gemfile.lock
+__pycache__/
+*.py[cod]
