@@ -152,11 +152,12 @@ Call `super(token, token_type)` for input types handled by the built-in resolver
 Run these commands from a source checkout. The installed Gem includes runtime
 code, example configurations and migration, README, changelog, and license;
 development scripts and tests are distributed with the source checkout.
-Development requires a C toolchain and Ruby development headers to compile the
-SQLite test dependency for the Ruby version in use.
+Development uses Bundler 2.4.22 and requires a C toolchain and Ruby development
+headers to compile the SQLite test dependency for the Ruby version in use.
 
 ```sh
-bundle install
+gem install bundler -v 2.4.22
+bundle _2.4.22_ install
 bundle exec rake
 bundle exec ruby -Ilib script/verify_tls.rb
 gem build rodauth-token_exchange.gemspec
