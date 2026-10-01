@@ -48,8 +48,9 @@ The grants table must allow **multiple grants for the same account and client**.
 Send form-encoded parameters to the existing token endpoint:
 
 Use HTTPS for the token endpoint and every endpoint receiving tokens. The extension
-rejects client-authenticated OAuth requests unless the server's `rack.url_scheme`
-is `https`. A TLS-terminating proxy must use trusted middleware to set that value;
+rejects token-exchange requests, before client authentication, unless the server's
+`rack.url_scheme` is `https`. Other grants and endpoints keep rodauth-oauth's
+transport behavior. A TLS-terminating proxy must use trusted middleware to set that value;
 untrusted `Forwarded` or `X-Forwarded-Proto` headers alone are not accepted. Do not
 expose the backend directly or send credentials over HTTP before a redirect.
 
@@ -71,10 +72,13 @@ client ID and secret once, as required by RFC 6749. Percent-encode each componen
 before constructing the Basic credential when it contains reserved characters.
 Combining Basic authentication with a body secret or client assertion is rejected.
 
-Form bodies and query strings are capped at 4 MiB and 4,096 parameters. The
-body is read with a byte bound before authentication. Limits enforced by Rack's
-configured flat parser also apply, including on versions without a pair parser.
-Stricter Rack limits are preserved. Excess input returns `invalid_request`.
+For token-exchange requests, form bodies and query strings are capped at 4 MiB
+and 4,096 parameters. The body is read with a byte bound before authentication.
+Limits enforced by Rack's configured flat parser also apply, including on
+versions without a pair parser. Stricter Rack limits are preserved. Excess input
+returns `invalid_request`. A body naming the token-exchange grant type in any
+parameter or encoding is parsed as an exchange; other grants keep
+rodauth-oauth's parsing and limits.
 
 Password-authenticated endpoints also require brute-force protection (RFC 6749
 §2.3.1). Configure and test an attempt limit at the deployment's trusted gateway
@@ -86,7 +90,7 @@ Enabling the feature alone does not install a limiter or prove deployment compli
 
 ## Defaults and policy
 
-By default, only a token issued to the authenticated client can be exchanged, actors are rejected, and resource/audience targets are rejected. The default resolver accepts active, unexpired local database access tokens, including exchange-issued JWT access tokens whose token hash is stored locally. It rejects sender-bound inputs rather than converting them into bearer tokens. It does not accept arbitrary external JWTs, SAML assertions, refresh tokens, or the `urn:ietf:params:oauth:token-type:jwt` type.
+By default, only a token issued to the authenticated client can be exchanged, resource/audience targets are rejected, and actors are rejected unless the subject identity carries a `may_act` claim (RFC 8693 §4.4) naming that actor. Every `may_act` claim must equal the actor's `sub` or `iss`; any other claim never matches. A `may_act` without `iss` names a principal of the subject's issuer, so the actor's issuer must equal the subject's (both absent for local tokens). An exchange without an actor preserves `may_act`, together with that issuer, for later exchanges, and an exchange that adds an actor consumes it. `may_act` is stored for the authorization server only and is not emitted in JWT or introspection output. Policies can reuse the check through `oauth_token_exchange_may_act?(subject, actor)`. The default resolver accepts active, unexpired local database access tokens, including exchange-issued JWT access tokens whose token hash is stored locally. It rejects sender-bound inputs rather than converting them into bearer tokens. It does not accept arbitrary external JWTs, SAML assertions, refresh tokens, or the `urn:ietf:params:oauth:token-type:jwt` type.
 
 For account-backed inputs, the default resolver also requires the account to be
 available through Rodauth's `oauth_account_ds`. Deleted accounts and accounts
@@ -123,6 +127,10 @@ Targets already attached to subject or actor tokens are inherited when omitted a
 
 Introspection and JWT output preserve `sub`, `act`, and target `aud` claims. Adding an actor creates a new `act.sub` and nests the subject's previous actor history under `act.act`. Exchanging without a new actor preserves existing actor context. Resource servers must enforce the intended audience and current actor authorization as well as token validity; verifying a JWT signature alone is insufficient. Historical nested actors describe prior delegation and do not independently grant current authority.
 
+An actor identity with an `issuer` produces `act.iss` alongside `act.sub`, distinguishing equal subjects from different issuers. An `act` entry without `iss` identifies a subject of this authorization server.
+
+With the `oidc` feature, the issued token's `sub` and local actors' `act.sub` follow the subject type (`public` or `pairwise`) of the client receiving the token, matching rodauth-oauth's JWT access tokens. Pairwise identifiers use that client's sector. The exchange context stores public identifiers and recomputes them for each client, so a pairwise identifier never flows into another client's token. Client subjects and actors with an `iss` are emitted unchanged.
+
 Actor history is limited to 16 nested actors. An exchange exceeding this bound
 returns `invalid_request` without issuing a grant or truncating the history.
 
@@ -144,6 +152,8 @@ Override `oauth_token_exchange_resolve_token(token, token_type)` to accept addit
 | `resources` | Optional array of permitted resource URI strings |
 | `audiences` | Optional array of permitted audience strings |
 | `act` | Optional verified actor claim hash |
+| `issuer` | Optional verified issuer string; emitted as `act.iss` when this identity is the actor |
+| `may_act` | Optional verified RFC 8693 `may_act` hash naming who may act for this subject |
 
 Call `super(token, token_type)` for input types handled by the built-in resolver. An external JWT or SAML resolver must verify signature, issuer, expiry, intended audience, and applicable client/key bindings before returning an identity. It must preserve target restrictions and verified actor context. Do not treat decoded claims as verified identity, silently drop sender constraints, or map an untrusted issuer's subject directly onto a local account.
 

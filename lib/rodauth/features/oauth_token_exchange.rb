@@ -77,16 +77,40 @@ module Rodauth
         subject: subject, account_id: account, application_id: application,
         scopes: grant[oauth_grants_scopes_column].to_s.split(oauth_scope_separator),
         expires_at: grant[oauth_grants_expires_in_column].to_time.to_i,
-        act: context["act"], resources: context.fetch("resource") {
+        act: context["act"], act_account_ids: context["act_account_ids"], may_act: context["may_act"],
+        resources: context.fetch("resource") {
           resource_column = respond_to?(:oauth_grants_resource_column) ? oauth_grants_resource_column : :resource
           grant[resource_column].to_s.split(" ")
         },
         audiences: context.fetch("audience", [])
-      }
+      }.compact
     end
 
     def oauth_token_exchange_authorized?(subject, actor)
-      !actor && subject[:application_id] == oauth_application[oauth_applications_id_column]
+      return false unless subject[:application_id] == oauth_application[oauth_applications_id_column]
+
+      !actor || oauth_token_exchange_may_act?(subject, actor)
+    end
+
+    # RFC 8693 §4.4: every claim in the subject's may_act must identify the actor.
+    # Unsupported may_act claims never match, so they deny rather than widen.
+    def oauth_token_exchange_may_act?(subject, actor)
+      may_act = oauth_token_exchange_may_act(subject)
+      return false unless may_act
+
+      # A sub is unique only within its issuer, so the issuer always takes part.
+      claims = {"sub" => actor[:subject], "iss" => actor[:issuer]}
+      may_act.all? { |claim, value| claims.key?(claim) && claims[claim] == value }
+    end
+
+    # A may_act without iss names a principal of the subject's issuer.
+    def oauth_token_exchange_may_act(subject)
+      may_act = subject[:may_act]
+      return unless may_act.is_a?(Hash) && !may_act.empty?
+
+      may_act = may_act.transform_keys(&:to_s)
+      may_act["iss"] = subject[:issuer] unless may_act.key?("iss")
+      may_act
     end
 
     def oauth_token_exchange_targets_allowed?(resources, audiences, _subject, _actor)
@@ -145,26 +169,33 @@ module Rodauth
       payload = super
       return payload unless grant && payload[:active]
 
-      if grant[oauth_grants_type_column] == TokenExchange::GRANT_TYPE
-        payload[:client_id] = db[oauth_applications_table]
-                             .where(oauth_applications_id_column => grant[oauth_grants_oauth_application_id_column])
-                             .get(oauth_applications_client_id_column)
+      if grant["sub"]
+        # Decoded JWT claims were already rendered for their issuing client.
+        %w[sub act aud].each { |key| payload[key.to_sym] = grant[key] if grant.key?(key) }
+        return payload
       end
-      context = grant["sub"] ? grant : oauth_token_exchange_context(grant)
-      %w[sub act aud].each { |key| payload[key.to_sym] = context[key] if context.key?(key) }
+
+      application = db[oauth_applications_table]
+                    .where(oauth_applications_id_column => grant[oauth_grants_oauth_application_id_column]).first
+      if grant[oauth_grants_type_column] == TokenExchange::GRANT_TYPE
+        payload[:client_id] = application && application[oauth_applications_client_id_column]
+      end
+      oauth_token_exchange_claims(grant, application).each { |key, value| payload[key.to_sym] = value }
       payload
     end
 
     private
 
     def require_oauth_application
+      if request.path == token_path && request.post? && request.media_type == "application/x-www-form-urlencoded" &&
+         oauth_token_exchange_candidate?
+        @oauth_token_exchange_params = oauth_token_exchange_parameters(true)
+      end
       # Only server/trusted middleware may assert transport security. Raw
       # Forwarded headers are client-controlled and must not bypass this check.
-      unless request.env["rack.url_scheme"] == "https"
+      # Other grants and endpoints keep rodauth-oauth's transport behavior.
+      if @oauth_token_exchange_params && request.env["rack.url_scheme"] != "https"
         throw_json_response_error(400, "invalid_request")
-      end
-      if request.path == token_path && request.post? && request.media_type == "application/x-www-form-urlencoded"
-        @oauth_token_exchange_params = oauth_token_exchange_parameters(true)
       end
       super
     rescue Rack::QueryParser::InvalidParameterError, Rack::QueryParser::ParameterTypeError
@@ -195,6 +226,7 @@ module Rodauth
 
       @oauth_token_exchange_params ||= oauth_token_exchange_parameters
       params = @oauth_token_exchange_params
+      redirect_response_error("invalid_request") unless request.env["rack.url_scheme"] == "https"
       %w[subject_token subject_token_type].each do |key|
         redirect_response_error("invalid_request") unless params[key]
       end
@@ -207,6 +239,26 @@ module Rodauth
     rescue Rack::QueryParser::InvalidParameterError, Rack::QueryParser::ParameterTypeError
       # Rack parses params in super, before the exchange-specific wire parser.
       redirect_response_error("invalid_request")
+    end
+
+    # Exchange-specific form limits must not change other grants. Scan the whole
+    # body, leniently decoding valid escapes, for any occurrence of the grant
+    # type; a match in any name or encoding gets the strict exchange parser.
+    def oauth_token_exchange_candidate?
+      input = request.body
+      input.rewind
+      overlap = TokenExchange::GRANT_TYPE.bytesize * 3
+      tail = String.new(encoding: Encoding::BINARY)
+      while (chunk = input.read(64 * 1024))
+        window = tail + chunk.b
+        decoded = window.gsub(/%(\h\h)/n) { Regexp.last_match(1).hex.chr }
+        return true if decoded.include?(TokenExchange::GRANT_TYPE)
+
+        tail = window.byteslice(-[overlap, window.bytesize].min, overlap)
+      end
+      false
+    ensure
+      input&.rewind
     end
 
     def oauth_token_exchange_parameters(only_if_exchange = false)
@@ -313,7 +365,19 @@ module Rodauth
       context = {"sub" => subject[:subject], "resource" => resources, "audience" => audiences}
       context["aud"] = targets unless targets.empty?
       context["act"] = subject[:act] if subject[:act]
-      context["act"] = {"sub" => actor[:subject], "act" => context["act"]}.compact if actor
+      # Local account IDs aligned with the actor chain (outermost first) allow
+      # pairwise clients to receive their own identifiers for local actors.
+      act_account_ids = subject.fetch(:act_account_ids, [])
+      if actor
+        context["act"] = {"sub" => actor[:subject], "iss" => actor[:issuer], "act" => context["act"]}.compact
+        act_account_ids = [actor[:account_id]] + act_account_ids
+      else
+        # A delegation permission is consumed by the exchange that adds an actor.
+        # Store the issuer with it so the namespace survives later exchanges.
+        may_act = oauth_token_exchange_may_act(subject)
+        context["may_act"] = may_act.compact if may_act
+      end
+      context["act_account_ids"] = act_account_ids if act_account_ids.any?
       history = context["act"]
       depth = 0
       while history
@@ -341,7 +405,10 @@ module Rodauth
       identity = oauth_token_exchange_resolve_token(token, type)
       unless identity.is_a?(Hash) && identity[:subject].is_a?(String) && !identity[:subject].empty? &&
              identity[:scopes].is_a?(Array) && identity[:scopes].all? { |scope| scope.is_a?(String) } &&
-             identity[:expires_at].is_a?(Integer) && identity[:expires_at] > Time.now.to_i
+             identity[:expires_at].is_a?(Integer) && identity[:expires_at] > Time.now.to_i &&
+             (identity[:issuer].nil? || (identity[:issuer].is_a?(String) && !identity[:issuer].empty?)) &&
+             (identity[:may_act].nil? || identity[:may_act].is_a?(Hash)) &&
+             (identity[:act_account_ids].nil? || identity[:act_account_ids].is_a?(Array))
         redirect_response_error("invalid_request")
       end
       identity
@@ -406,7 +473,7 @@ module Rodauth
     def jwt_claims(grant)
       claims = super
       context = oauth_token_exchange_context(grant)
-      %w[sub act aud].each { |key| claims[key.to_sym] = context[key] if context.key?(key) }
+      oauth_token_exchange_claims(grant, oauth_application, context).each { |key, value| claims[key.to_sym] = value }
       if grant[oauth_grants_type_column] == TokenExchange::GRANT_TYPE
         claims[:exp] = grant[oauth_grants_expires_in_column].to_time.to_i
         claims[:token_exchange_id] = grant[oauth_grants_id_column].to_s
@@ -418,6 +485,36 @@ module Rodauth
     def oauth_token_exchange_context(grant)
       value = grant[oauth_grants_token_exchange_context_column]
       value ? JSON.parse(value) : {}
+    end
+
+    # Context stores subject identifiers as resolved (public for local
+    # accounts). Pairwise clients receive their own sector identifiers for the
+    # subject and local actors, matching upstream JWT access-token subjects.
+    def oauth_token_exchange_claims(grant, application, context = oauth_token_exchange_context(grant))
+      claims = context.slice("sub", "act", "aud")
+      return claims unless oauth_token_exchange_pairwise?(application)
+
+      account = grant[oauth_grants_account_id_column]
+      claims["sub"] = jwt_subject(account, application) if account && claims.key?("sub")
+      if claims["act"]
+        claims["act"] = oauth_token_exchange_pairwise_act(claims["act"], context.fetch("act_account_ids", []), application)
+      end
+      claims
+    end
+
+    def oauth_token_exchange_pairwise?(application)
+      return false unless application && features.include?(:oidc)
+
+      (application[oauth_applications_subject_type_column] || oauth_jwt_subject_type) == "pairwise"
+    end
+
+    def oauth_token_exchange_pairwise_act(act, account_ids, application)
+      return act unless act.is_a?(Hash)
+
+      account, *older = account_ids
+      act = act.merge("sub" => jwt_subject(account, application)) if account && !act.key?("iss")
+      act = act.merge("act" => oauth_token_exchange_pairwise_act(act["act"], older, application)) if act["act"]
+      act
     end
   end
 end

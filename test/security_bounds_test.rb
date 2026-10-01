@@ -99,6 +99,44 @@ class SecurityBoundsTest < ExchangeTest
     Rack::Utils.default_query_parser = original
   end
 
+  def test_form_limits_apply_only_to_exchange_requests
+    original = Rack::Utils.default_query_parser
+    Rack::Utils.default_query_parser = Rack::QueryParser.make_default(32, params_limit: 8192)
+    post "/token", "grant_type=client_credentials&scope=read" + "&ignored=x" * 4100,
+         "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+    assert_equal 200, last_response.status, last_response.body
+    assert_rejected_form(base_form + "&ignored=x" * 4100)
+    assert_rejected_form("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-%65xchange" \
+                         "&subject_token=subject-token&subject_token_type=#{URI.encode_www_form_component(ACCESS)}" + "&ignored=x" * 4100)
+  ensure
+    Rack::Utils.default_query_parser = original
+  end
+
+  def test_form_byte_limit_applies_only_to_exchange_requests
+    original = Rack::Utils.default_query_parser
+    Rack::Utils.default_query_parser = Rack::QueryParser.make_default(32, bytesize_limit: 8 * 1024 * 1024)
+    padding = "&ignored=" + "x" * (4 * 1024 * 1024)
+    post "/token", "grant_type=client_credentials&scope=read" + padding,
+         "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+    assert_equal 200, last_response.status, last_response.body
+    assert_rejected_form(base_form + padding)
+  ensure
+    Rack::Utils.default_query_parser = original
+  end
+
+  def test_exchange_spanning_body_chunks_is_detected_before_authentication
+    env "rack.url_scheme", "http"
+    basic_authorize "client", "wrong"
+    encoded = "grant_type=" + GRANT.bytes.map { |byte| format("%%%02X", byte) }.join
+    [base_form, encoded].each do |form|
+      [40, 100].each do |offset|
+        post "/token", "ignored=" + "x" * (64 * 1024 - offset) + "&" + form,
+             "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+        assert_error "invalid_request"
+      end
+    end
+  end
+
   private
 
   def base_form

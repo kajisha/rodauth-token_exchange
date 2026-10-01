@@ -19,6 +19,22 @@ class TransportTest < ExchangeTest
     assert_error "invalid_request"
   end
 
+  def test_plain_http_exchange_is_rejected_before_client_authentication
+    env "rack.url_scheme", "http"
+    basic_authorize "client", "wrong"
+    exchange
+    assert_error "invalid_request"
+  end
+
+  def test_other_grants_and_endpoints_keep_upstream_transport_behavior
+    env "rack.url_scheme", "http"
+    post "/token", grant_type: "client_credentials"
+    assert_equal 200, last_response.status, last_response.body
+    post "/introspect", token: "subject-token"
+    assert_equal 200, last_response.status, last_response.body
+    assert_equal true, body["active"]
+  end
+
   def test_https_can_issue_tokens
     env "rack.url_scheme", "https"
     exchange

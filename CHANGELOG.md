@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+- Accept actors named by the subject's `may_act` claim in the default authorization policy. A `may_act` without `iss` matches only actors from the subject's issuer.
+- Emit `act.iss` for actor identities that carry an issuer.
+- Render `sub` and local `act.sub` per the receiving client's OIDC subject type (public/pairwise).
+- Limit the HTTPS requirement to token-exchange requests.
+- Apply the extension's form byte, parameter-count and encoding limits only to token-exchange requests.
+
 - Reject exchange inputs whose local subject or actor account is no longer available.
 
 - Pin database and JWT expiration to an absolute input-bounded deadline.
