@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Uses the same real Rack/Rodauth/SQLite fixture as the regression tests.
-# N=1000 ROUNDS=5 OUTPUT=docs/performance-after.json bundle exec ruby -Ilib script/benchmark_token_exchange.rb
+# N=1000 ROUNDS=5 OUTPUT=benchmark.json bundle exec ruby -Ilib script/benchmark_token_exchange.rb
 require_relative "../test/test_helper"
 require "jwt"
 

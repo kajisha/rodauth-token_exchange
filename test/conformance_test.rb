@@ -4,7 +4,7 @@ require_relative "test_helper"
 require "jwt"
 
 # Local equivalents of selected pinned OpenID suite conditions, plus RFC 8693
-# boundary cases. See docs/rfc8693-coverage.md for source conditions and limits.
+# boundary cases.
 class ConformanceTest < ExchangeTest
   KEY = "conformance-test-signing-key-" * 3
 

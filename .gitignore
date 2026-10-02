@@ -5,3 +5,4 @@
 /Gemfile.lock
 __pycache__/
 *.py[cod]
+/benchmark.json
