@@ -14,7 +14,9 @@ required = %w[lib/rodauth/token_exchange.rb lib/rodauth/token_exchange/version.r
 missing = required - package.spec.files
 abort "Missing packaged files: #{missing.join(', ')}" unless missing.empty?
 
-Dir.mktmpdir("token-exchange-package-") do |directory|
+Dir.mktmpdir("token-exchange-package-") do |temporary|
+  # $LOADED_FEATURES holds real paths; macOS temporary directories are symlinked.
+  directory = File.realpath(temporary)
   package.extract_files(directory)
   $LOAD_PATH.unshift(File.join(directory, "lib"))
   require "rodauth/token_exchange"
@@ -32,6 +34,20 @@ Dir.mktmpdir("token-exchange-package-") do |directory|
       require "rodauth/token_exchange"
       expected = File.expand_path("lib/rodauth/token_exchange.rb")
       abort "Loaded source checkout instead of package" unless $LOADED_FEATURES.include?(expected)
+      # Minitest treats an empty run as success; require every test to run.
+      # Registered before the tests load autorun, this hook runs after Minitest.
+      require "minitest"
+      runs = 0
+      Minitest::Runnable.singleton_class.prepend(Module.new do
+        define_method(:run_one_method) { |*arguments| runs += 1; super(*arguments) }
+      end)
+      at_exit do
+        expected_runs = Minitest::Runnable.runnables.sum { |runnable| runnable.public_instance_methods.grep(/\\Atest_/).size }
+        unless runs.positive? && runs == expected_runs
+          warn "Packaged suite ran \#{runs} of \#{expected_runs} tests"
+          exit! 1
+        end
+      end
       Dir["test/**/*_test.rb"].sort.each { |path| require File.expand_path(path) }
       loaded = $LOADED_FEATURES.select { |path| path.match?(%r{/lib/rodauth/(?:token_exchange(?:/|\\.rb)|features/oauth_token_exchange\\.rb)}) }
       abort "Mixed package and checkout sources" unless loaded.all? { |path| path.start_with?(File.expand_path("lib") + "/") }
@@ -39,7 +55,8 @@ Dir.mktmpdir("token-exchange-package-") do |directory|
     # Bundler evaluates this checkout's gemspec (and version.rb) before -I is
     # applied. Use the same installed gems without its source-path injection.
     environment = ENV.keys.grep(/\ABUNDLE/).to_h { |name| [name, nil] }
-    environment.merge!("RUBYOPT" => nil, "RUBYLIB" => nil, "RUBYGEMS_GEMDEPS" => nil,
+    # Without Bundler, Minitest would load plugins from every installed gem.
+    environment.merge!("MT_NO_PLUGINS" => "1", "RUBYOPT" => nil, "RUBYLIB" => nil, "RUBYGEMS_GEMDEPS" => nil,
                        "GEM_HOME" => Gem.dir, "GEM_PATH" => Gem.path.join(File::PATH_SEPARATOR))
     passed = system(environment, RbConfig.ruby, "-I#{directory}/lib", "-I#{directory}/test", "-e", runner, chdir: directory)
     abort "Packaged regression suite failed" unless passed
