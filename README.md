@@ -6,17 +6,10 @@ Requires Ruby 3.0 or newer and rodauth-oauth `~> 1.7.0`.
 
 ## Installation
 
-For a published release, add to your Gemfile and run `bundle install`:
+Add to your Gemfile and run `bundle install`:
 
 ```ruby
 gem "rodauth-token_exchange", "~> 0.1.0"
-```
-
-Until the first release is published, or when developing against a local checkout,
-use this entry instead:
-
-```ruby
-gem "rodauth-token_exchange", path: "/path/to/rodauth-token_exchange"
 ```
 
 In your existing Rodauth OAuth server, load the extension and enable it **after** other OAuth features, including `oauth_jwt`, `oauth_token_introspection`, and `oauth_resource_indicators` when used:
@@ -42,6 +35,14 @@ through `oauth_jwt`, which is supported and tested.
 Add a nullable text column named `token_exchange_context` to the grants table; it stores JSON containing subject, actor, and target context. A Sequel migration is provided in [examples/migrate/001_token_exchange_context.rb](examples/migrate/001_token_exchange_context.rb). The column name is configurable with `oauth_grants_token_exchange_context_column`.
 
 The grants table must allow **multiple grants for the same account and client**. Remove any unique index enforcing one grant per account/client (including variants containing scopes), using your application's actual index name. Keep token and refresh-token uniqueness constraints. Exchanges always insert a new grant and bypass access-token reuse; other grant types retain their existing behavior. The example migration does not guess or remove application-specific indexes.
+
+### Compatibility notes
+
+Enabling the extension changes behavior beyond token-exchange requests in these ways:
+
+- Client authentication changes apply to every endpoint that authenticates a client, including other grants, introspection, and revocation. Basic credentials are form-decoded (see [Exchange an access token](#exchange-an-access-token)), so existing clients whose ID or secret contains `+` or `%` must percent-encode them. Requests combining more than one client-authentication method are rejected.
+- Applications whose `grant_types` column is `NULL` accept every supported grant, as in rodauth-oauth, and can therefore use token exchange immediately. The default policy still limits them to their own tokens, with no actors or targets. Set `grant_types` explicitly to opt applications out.
+- Expiration deadlines are computed in Ruby and stored in the grants table, and expiration checks run in the database. As rodauth-oauth already assumes for introspection and JWT `exp`, Sequel's timezone settings must match the database session timezone.
 
 ## Exchange an access token
 

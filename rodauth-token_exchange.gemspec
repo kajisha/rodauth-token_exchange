@@ -6,6 +6,8 @@ Gem::Specification.new do |spec|
   spec.name = "rodauth-token_exchange"
   spec.version = Rodauth::TokenExchange::VERSION
   spec.summary = "RFC 8693 Token Exchange for rodauth-oauth"
+  spec.description = "Adds the RFC 8693 token-exchange grant to rodauth-oauth's token endpoint, " \
+                     "with delegation (act and may_act), bounded scopes and lifetimes, and policy hooks."
   spec.authors = ["Hiroshi Kajisha"]
   spec.email = ["1960696+kajisha@users.noreply.github.com"]
   spec.license = "MIT"

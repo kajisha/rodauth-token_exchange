@@ -1,23 +1,17 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-05)
 
-- Accept actors named by the subject's `may_act` claim in the default authorization policy. A `may_act` without `iss` matches only actors from the subject's issuer.
-- Emit `act.iss` for actor identities that carry an issuer.
+Initial release.
+
+- Add the RFC 8693 token-exchange grant to the rodauth-oauth token endpoint, accepting and issuing access tokens.
+- Issue independent access tokens; source grants are neither replaced nor revoked.
+- Bound scopes to the intersection of the subject token, actor token and client, and lifetime to an absolute deadline no later than either input's expiration, shared by the database and JWT `exp`.
+- Support delegation: actor tokens, nested `act` history up to 16 entries, `act.iss` for actors with an issuer, and actors named by the subject's `may_act` claim.
+- Support repeated `resource` and `audience` targets, inherited from inputs and never broadened.
 - Render `sub` and local `act.sub` per the receiving client's OIDC subject type (public/pairwise).
-- Limit the HTTPS requirement to token-exchange requests.
-- Apply the extension's form byte, parameter-count and encoding limits only to token-exchange requests.
-
-- Reject exchange inputs whose local subject or actor account is no longer available.
-
-- Pin database and JWT expiration to an absolute input-bounded deadline.
-- Reject actor chains exceeding 16 entries with an OAuth error.
-- Bound flat form parsing by bytes and parameter count, retaining configured Rack limits.
-- Add non-exchange client authentication regression coverage.
-
-- Add the RFC 8693 token-exchange grant as a rodauth-oauth extension.
-- Issue independent access tokens with bounded scopes and lifetime; preserve source grants.
-- Support subject/actor policy hooks, repeated resource/audience targets, and trusted custom token resolvers.
-- Preserve subject, actor history, and target claims in introspection and JWT output.
-- Store exchange context as JSON in a configurable grants column.
-- Include endpoint tests and an example Sequel migration.
+- Provide policy hooks for exchange authorization and targets, and a resolver hook for trusted custom input tokens.
+- Reject inputs whose local subject or actor account is no longer available.
+- Require HTTPS and bound form size, parameter count and encoding for token-exchange requests.
+- Preserve subject, actor and target claims in introspection and JWT output.
+- Store exchange context as JSON in a configurable grants column; include an example Sequel migration and nginx reference configuration.
