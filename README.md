@@ -43,6 +43,7 @@ Enabling the extension changes behavior beyond token-exchange requests in these 
 - Client authentication changes apply to every endpoint that authenticates a client, including other grants, introspection, and revocation. Basic credentials are form-decoded (see [Exchange an access token](#exchange-an-access-token)), so existing clients whose ID or secret contains `+` or `%` must percent-encode them. Requests combining more than one client-authentication method are rejected.
 - Applications whose `grant_types` column is `NULL` accept every supported grant, as in rodauth-oauth, and can therefore use token exchange immediately. The default policy still limits them to their own tokens, with no actors or targets. Set `grant_types` explicitly to opt applications out.
 - Expiration deadlines are computed in Ruby and stored in the grants table, and expiration checks run in the database. As rodauth-oauth already assumes for introspection and JWT `exp`, Sequel's timezone settings must match the database session timezone.
+- With `oauth_resource_indicators`, this extension replaces rodauth-oauth 1.7's URL prefix checks for the auth class that enables it. This applies to all resource-protected access tokens in that class, including tokens from other grants. Authentication, scope, signature, expiry, and sender-binding checks still run. Other auth classes and the installed upstream gem are unchanged.
 
 ## Exchange an access token
 
@@ -125,6 +126,18 @@ end
 For delegation or cross-client exchange, the authorization hook must check which authenticated client may act for the subject and actor. Possession of two tokens alone is not sufficient authorization. Avoid unconditional `true` policies.
 
 Targets already attached to subject or actor tokens are inherited when omitted and cannot be broadened on subsequent exchanges, even by an approving target policy. Incompatible target restrictions fail with `invalid_target`. Native `oauth_resource_indicators` resource restrictions are preserved. Named audiences require an application-defined routing and authorization policy.
+
+When composing `oauth_resource_indicators`, protected-resource checks compare the
+request and target's scheme, host, and effective port. A target with no path or
+with `/` permits that origin; another path permits that exact path and descendants
+separated by `/`, not similarly prefixed sibling paths. A query in the target must
+match the request query exactly. Paths containing dot segments (including encoded
+dot segments) or encoded slash/backslash separators are rejected rather than
+depending on router normalization. Non-HTTP audiences need application-defined
+routing; they do not match an HTTP resource URL on their own. Keep the request's
+authority trustworthy through fixed Host configuration or equivalent ingress
+validation. Enable this extension after the other OAuth features on a separate
+resource server too; unsafe ordering is rejected there as well.
 
 Introspection and JWT output preserve `sub`, `act`, and target `aud` claims. Adding an actor creates a new `act.sub` and nests the subject's previous actor history under `act.act`. Exchanging without a new actor preserves existing actor context. Resource servers must enforce the intended audience and current actor authorization as well as token validity; verifying a JWT signature alone is insufficient. Historical nested actors describe prior delegation and do not independently grant current authority.
 

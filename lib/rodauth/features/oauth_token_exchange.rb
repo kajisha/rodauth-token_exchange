@@ -4,6 +4,7 @@ require "rodauth/oauth"
 require "json"
 require "uri"
 require "rodauth/token_exchange/client_authentication"
+require "rodauth/token_exchange/resource_authorization"
 
 module Rodauth
   module TokenExchange
@@ -33,6 +34,7 @@ module Rodauth
   Feature.define(:oauth_token_exchange, :OauthTokenExchange) do
     depends :oauth_base
     include TokenExchange::ClientAuthentication
+    include TokenExchange::ResourceAuthorization
 
     auth_value_method :oauth_grants_token_exchange_context_column, :token_exchange_context
     auth_methods :oauth_token_exchange_resolve_token, :oauth_token_exchange_authorized?,
@@ -132,9 +134,7 @@ module Rodauth
 
     def post_configure
       super
-      return unless is_authorization_server?
-
-      if features.include?(:oauth_assertion_base)
+      if is_authorization_server? && features.include?(:oauth_assertion_base)
         raise Rodauth::ConfigurationError, "oauth_token_exchange cannot be combined with oauth_assertion_base (including oauth_jwt_bearer_grant)"
       end
       composed = %i[oauth_jwt oauth_token_introspection oauth_resource_indicators oauth_tls_client_auth oauth_dpop
@@ -142,6 +142,8 @@ module Rodauth
       if composed.any? { |feature| features.include?(feature) && features.index(feature) > features.index(:oauth_token_exchange) }
         raise Rodauth::ConfigurationError, "enable oauth_token_exchange after the other OAuth features"
       end
+      return unless is_authorization_server?
+
       grant_keys = [oauth_grants_oauth_application_id_column, oauth_grants_account_id_column,
                     oauth_grants_scopes_column, oauth_grants_type_column]
       incompatible_index = db.indexes(oauth_grants_table).values.any? do |index|

@@ -8,6 +8,7 @@ require "rbconfig"
 package = Gem::Package.new(ARGV.fetch(0))
 required = %w[lib/rodauth/token_exchange.rb lib/rodauth/token_exchange/version.rb
               lib/rodauth/token_exchange/client_authentication.rb
+              lib/rodauth/token_exchange/resource_authorization.rb
               lib/rodauth/features/oauth_token_exchange.rb README.md LICENSE
               CHANGELOG.md examples/migrate/001_token_exchange_context.rb
               examples/nginx-token-exchange.conf]

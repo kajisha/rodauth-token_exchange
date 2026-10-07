@@ -14,4 +14,5 @@ Initial release.
 - Reject inputs whose local subject or actor account is no longer available.
 - Require HTTPS and bound form size, parameter count and encoding for token-exchange requests.
 - Preserve subject, actor and target claims in introspection and JWT output.
+- Enforce resource origins and path boundaries for opaque and JWT access tokens when composed with `oauth_resource_indicators`, without changing the upstream gem or other auth classes.
 - Store exchange context as JSON in a configurable grants column; include an example Sequel migration and nginx reference configuration.
